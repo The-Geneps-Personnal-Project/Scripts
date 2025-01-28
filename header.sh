@@ -47,9 +47,15 @@ VALID_UPDATE=("major" "minor" "patch" '^[0-9]+\.[0-9]+(\.[0-9]+)?$')
 current_dir_path=${PWD##*/}
 current_dir_path=${current_dir_path:-/}
 
-# By default, author name is the current system user
-user_name=$(whoami)
-user_name=${user_name:-"unknown"}
+# The current user's name and email, or the system username if not in a git repo
+if [[ $(git rev-parse --is-inside-work-tree 2>/dev/null) ]]; then
+    user_name="$(git config user.name 2>/dev/null || echo 'unknown')"
+    user_email="$(git config user.email 2>/dev/null || echo 'unknown')"
+    user_name="$user_name <$user_email>"
+else
+    user_name=$(whoami)
+    user_name=${user_name:-"unknown"}
+fi
 
 # Script's own version identifier (not the file’s version)
 version="1.0.0"
@@ -60,38 +66,15 @@ language="bash"      # Programming language
 shebang="none"       # Shebang type
 template="default"   # Header template style
 comment_character="" # Comment prefix (e.g. #, //)
+description=""       # Description of the file
+verbose=false        # Verbose mode
 
 # Final parameter from the command line is typically the file to process
 dest_file=${@: -1}
 
-# ----------------------------------------
-# 3) LOAD CONFIG (.header_config if exists)
-# ----------------------------------------
-# If a local .header_config file is present, read defaults from it.
-# Each line is "Key=Value", e.g. "Author=John Doe"
-# This is optional and can be overridden by CLI flags.
-
-if [[ -f ".header_config" ]]; then
-    while IFS='=' read -r key value; do
-        # Skip empty or commented lines
-        [[ -z "$key" || "$key" =~ ^# ]] && continue
-        
-        # Trim whitespace around key/value
-        key=$(echo "$key" | xargs)
-        value=$(echo "$value" | xargs)
-
-        # Assign config values to appropriate variables
-        case "$key" in
-            Author)    user_name="$value" ;;
-            Language)  lang="$value" ;;
-            Shebang)   shebang="$value" ;;
-            Template)  template="$value" ;;
-        esac
-    done < .header_config
-fi
 
 # -------------------------------------------------------
-# 4) TRANSLATIONS (used to localize header field keywords)
+# 3) TRANSLATIONS (used to localize header field keywords)
 # -------------------------------------------------------
 # We store them in an associative array so we can pick
 # the correct term for the user's chosen language.
@@ -135,7 +118,7 @@ declare -A translations=(
 )
 
 # ----------------------------------------------------
-# 5) LANGUAGE CONFIGS (SHEBANG|COMMENT) PER EXTENSION
+# 4) LANGUAGE CONFIGS (SHEBANG|COMMENT) PER EXTENSION
 # ----------------------------------------------------
 # Each key is a programming language, with a string
 # containing "shebang|comment_char". For example,
@@ -156,7 +139,7 @@ declare -A language_configs=(
 )
 
 # --------------------------
-# 6) UTILITY FUNCTIONS
+# 5) UTILITY FUNCTIONS
 # --------------------------
 
 # join_by - Joins an array of strings with a chosen separator.
@@ -208,20 +191,25 @@ update_version() {
 # detect_language - Detects a programming language by file extension
 detect_language() {
     local extension="${1##*.}"
+    local result
+
     case "$extension" in
-        sh) echo "bash" ;;
-        py) echo "python" ;;
-        pl) echo "perl" ;;
-        rb) echo "ruby" ;;
-        php) echo "php" ;;
-        java) echo "java" ;;
-        js|ts|tsx|jsx|mjs) echo "javascript" ;;
-        c|h) echo "c" ;;
-        cpp|cc|cxx|hpp) echo "cpp" ;;
-        go) echo "go" ;;
-        rs) echo "rust" ;;
-        *) echo "bash" ;;  # Default to bash if unknown
+        sh) result="bash" ;;
+        py) result="python" ;;
+        pl) result="perl" ;;
+        rb) result="ruby" ;;
+        php) result="php" ;;
+        java) result="java" ;;
+        js|ts|tsx|jsx|mjs) result="javascript" ;;
+        c|h) result="c" ;;
+        cpp|cc|cxx|hpp) result="cpp" ;;
+        go) result="go" ;;
+        rs) result="rust" ;;
+        *) result="bash" ;;  # Default to bash if unknown
     esac
+
+    log_info "Detected extension '$extension', using language: $result"
+    echo "$result"
 }
 
 # print_lines - Prints 15 copies of the comment character for a visual separator
@@ -265,8 +253,16 @@ contains() {
     return $ret
 }
 
+# log_info - Logs a message if verbose mode is enabled
+log_info() {
+    local msg="$1"
+    if [[ "$verbose" == true ]]; then
+        echo "[INFO]: $msg" >&2
+    fi
+}
+
 # -----------------------------
-# 7) HEADER GENERATION FUNCTIONS
+# 6) HEADER GENERATION FUNCTIONS
 # -----------------------------
 
 # default_header - Creates a multi-line header with distinct lines
@@ -281,7 +277,7 @@ default_header() {
     # Author, creation date, description fields
     echo "$comment_character    $(get_translation "Author" "$slang"): $user_name" >> "$file"
     echo "$comment_character    $(get_translation "Creation Date" "$slang"): $now" >> "$file"
-    echo "$comment_character    $(get_translation "Description" "$slang"): " >> "$file"
+    echo "$comment_character    $(get_translation "Description" "$slang"): $description" >> "$file"
 
     print_lines "$comment_character" "$file"
 
@@ -302,14 +298,14 @@ custom_header() {
 
     echo "${comment_character} [$(get_translation "Author" "$slang"): $user_name]" >> "$file"
     echo "${comment_character} [$(get_translation "Creation Date" "$slang"): $now]" >> "$file"
-    echo "${comment_character} [$(get_translation "Description" "$slang"): ]" >> "$file"
+    echo "${comment_character} [$(get_translation "Description" "$slang"): $description]" >> "$file"
     echo "${comment_character} [$(get_translation "Version" "$slang"): 1.0.0]" >> "$file"
     echo "${comment_character} [$(get_translation "Last edited by" "$slang"): $user_name]" >> "$file"
     echo "${comment_character} [$(get_translation "Last edited on" "$slang"): $now]" >> "$file"
 }
 
 # -----------------------------
-# 8) MAIN (PRIMARY) FUNCTIONS
+# 7) MAIN (PRIMARY) FUNCTIONS
 # -----------------------------
 
 # Help - Prints usage instructions
@@ -332,6 +328,7 @@ Options:
     -u, --update    Update the header with the specified version
                     ($(join_by ", " ${VALID_UPDATE[*]::${#VALID_UPDATE[*]}-1})) or
                     with a version number (eg. 2.1.7).
+    -d, --description  Add a description to the file.
     
 Config File:
     You can create a .header_config file in the same directory to set default values.
@@ -376,6 +373,8 @@ update_header() {
     local dest_file="$2"
     local slang="${lang:-en}"
 
+    log_info "Updating header in $dest_file with version $update_type..."
+
     # Extract the current version by searching for the "Version: X.Y.Z" line
     local current_version
     current_version=$(grep -oP "(?<=$(get_translation "Version" "$slang"): )\d+\.\d+(\.\d+)?" "$dest_file")
@@ -410,7 +409,9 @@ write_header() {
 
     # If user specified a non-"none" shebang, write that line first
     if [[ -n "$shebang" && "$shebang" != "none" ]]; then
-        echo "$config_shebang" > "$file"
+        if ! head -1 "$file" | grep -q '^#!'; then
+            echo "$config_shebang" > "$file"
+        fi    
     fi
 
     # If no comment override was given, use the detected language's comment
@@ -426,12 +427,53 @@ write_header() {
 }
 
 # --------------------------------------
-# 9) CLI ARGUMENT PARSING VIA GETOPT
+# 8) PRE-PROCESSING & ARGUMENT HANDLING
+# --------------------------------------
+# Before we start processing the file, we check for verbose mode and load config.
+
+for arg in "$@"; do
+    if [[ "$arg" == "-x" || "$arg" == "--verbose" ]]; then
+        verbose=true
+        break
+    fi
+done
+
+# ----------------------------------------
+# 9) LOAD CONFIG (.header_config if exists)
+# ----------------------------------------
+# If a local .header_config file is present, read defaults from it.
+# Each line is "Key=Value", e.g. "Author=John Doe"
+# This is optional and can be overridden by CLI flags.
+
+if [[ -f ".header_config" ]]; then
+    log_info "Loading default values from .header_config file..."
+    while IFS='=' read -r key value; do
+        # Skip empty or commented lines
+        [[ -z "$key" || "$key" =~ ^# ]] && continue
+        
+        # Trim whitespace around key/value
+        key=$(echo "$key" | xargs)
+        value=$(echo "$value" | xargs)
+
+        # Assign config values to appropriate variables
+        case "$key" in
+            Author)    user_name="$value" ;;
+            Language)  lang="$value" ;;
+            Shebang)   shebang="$value" ;;
+            Template)  template="$value" ;;
+        esac
+    done < .header_config
+else
+    log_info "No .header_config file found, using default values."
+fi
+
+# --------------------------------------
+# 10) CLI ARGUMENT PARSING VIA GETOPT
 # --------------------------------------
 # We use getopt to parse short/long options and set variables accordingly.
 
-OPTIONS=hva:l:c:s:t:u:
-LONGOPTS=help,version,author:,language:,comment:,shebang:,template:,update:
+OPTIONS=hva:l:c:s:t:u:d
+LONGOPTS=help,version,author:,language:,comment:,shebang:,template:,update:,description
 
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTS --name "$0" -- "$@")
 if [[ $? -ne 0 ]]; then
@@ -514,6 +556,10 @@ while true; do
             # Perform the update, then exit
             update_header "$2" "$dest_file"
             exit
+            ;;
+        -d|--description)
+            read -r -p "Enter a description for the file: " description
+            shift
             ;;
         --)
             # End of options
