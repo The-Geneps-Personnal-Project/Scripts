@@ -162,26 +162,10 @@ update_version() {
     IFS='.' read -r major minor patch <<< "$version"
 
     case "$update" in
-        major)
-            # major++ => minor=0, patch=0
-            major=$((major + 1))
-            minor=0
-            patch=0
-            ;;
-        minor)
-            # minor++ => patch=0
-            minor=$((minor + 1))
-            patch=0
-            ;;
-        patch)
-            # patch++
-            patch=$((patch + 1))
-            ;;
-        # If user passes a full version directly, just echo it
-        *)
-            echo "$update"
-            return 0
-            ;;
+        major) major=$((major + 1)); minor=0; patch=0 ;;
+        minor) minor=$((minor + 1)); patch=0 ;;
+        patch) patch=$((patch + 1)) ;;
+        *) echo "$update"; return 0 ;;  # direct version string
     esac
 
     # Return the new version string
@@ -190,7 +174,7 @@ update_version() {
 
 # detect_language - Detects a programming language by file extension
 detect_language() {
-    local extension="${1##*.}"
+    local extension=$1
     local result
 
     case "$extension" in
@@ -335,7 +319,6 @@ Config File:
     Example:
         Author=John Doe
         Language=en
-        Shebang=sh
         Template=default
 
 Examples:
@@ -399,24 +382,41 @@ write_header() {
     local file="$1"
     local slang="${lang:-en}"
 
+    # Ensure the file exists, even if empty
+    if [[ ! -f "$file" ]]; then
+       : > "$file"
+    fi
+
     # Detect language by file extension
     local detected_lang
-    detected_lang="$(detect_language "$file")"
+    if [[ "$shebang" != "none" ]]; then
+        detected_lang="$(detect_language "$shebang")"
+    else
+        detected_lang="$(detect_language ${file##*.})"
+    fi
 
-    # Retrieve associated config (shebang and default comment)
-    local config="${language_configs[$detected_lang]}"
+    # Retrieve associated config (shebang|comment)
+    local config
+    if [[ -n "${language_configs[$detected_lang]:-}" ]]; then
+       config="${language_configs[$detected_lang]}"
+    else
+       # fallback if no config found
+       config="|#"
+    fi
     IFS='|' read -r config_shebang config_comment <<< "$config"
 
-    # If user specified a non-"none" shebang, write that line first
-    if [[ -n "$shebang" && "$shebang" != "none" ]]; then
-        if ! head -1 "$file" | grep -q '^#!'; then
-            echo "$config_shebang" > "$file"
-        fi    
-    fi
+    echo $config_shebang
 
     # If no comment override was given, use the detected language's comment
     if [[ -z "$comment_character" ]]; then
         comment_character="$config_comment"
+    fi
+
+    # If shebang is not empty, write it only if no existing #! line
+    if [[ -n "$shebang" ]]; then
+        if ! head -1 "$file" 2>/dev/null | grep -q '^#!'; then
+            echo "$config_shebang" > "$file"
+        fi
     fi
 
     # Call the appropriate header function based on chosen template
@@ -425,6 +425,7 @@ write_header() {
         single)  custom_header "$file" "$slang" ;;
     esac
 }
+
 
 # --------------------------------------
 # 8) PRE-PROCESSING & ARGUMENT HANDLING
@@ -459,7 +460,6 @@ if [[ -f ".header_config" ]]; then
         case "$key" in
             Author)    user_name="$value" ;;
             Language)  lang="$value" ;;
-            Shebang)   shebang="$value" ;;
             Template)  template="$value" ;;
         esac
     done < .header_config
@@ -538,7 +538,7 @@ while true; do
             ;;
         -u|--update)
             # This option updates the header version
-            if [[ -z "$2" || "$2" =~ ^- ]]; then
+            if [[ -z "${2:-}" || "${2:-}" =~ ^- ]]; then
                 echo "Error: --update requires a version argument"
                 exit 1
             fi
@@ -582,7 +582,7 @@ if [[ -z "$lang" ]]; then
 fi
 
 # The last argument after the parsed options is the file to operate on
-if [[ -n "$1" && ! "$1" =~ ^- ]]; then
+if [[ -n "${1:-}" && ! "${1:-}" =~ ^- ]]; then
     dest_file="$1"
 
     # If the file already exists, we prepend a header (append_header).
