@@ -21,6 +21,18 @@ template="default"
 
 dest_file=${@: -1}
 
+if [[ -f ".header_config" ]]; then
+    IFS='='
+    while read -r var value || [ -n "$var" ]; do
+        case "$var" in
+            Author) user_name="$value" ;;
+            Language) lang="$value" ;;
+            Shebang) shebang="$value" ;;
+            Template) template="$value" ;;
+        esac
+    done < .header_config
+fi
+
 # Translations
 declare -A translations=(
     ["Author_en"]="Author"
@@ -48,6 +60,11 @@ declare -A translations=(
     ["Last edited by_de"]="Zuletzt bearbeitet von"
     ["Last edited by_es"]="Última edición por"
     ["Last edited by_it"]="Ultima modifica di"
+    ["Last edited on_en"]="Last edited on"
+    ["Last edited on_fr"]="Dernière modification le"
+    ["Last edited on_de"]="Zuletzt bearbeitet am"
+    ["Last edited on_es"]="Última edición el"
+    ["Last edited on_it"]="Ultima modifica il"
 )
 
 # Single-string approach: "Language|Shebang|Comment"
@@ -120,30 +137,7 @@ contains() {
     return $in
 }
 
-# Main Functions
-
-Help() {
-    cat << EOF
-Usage: $0 [options] <file>
-Description:
-    This script adds a header to the specified file depending on its extension.
-
-Options:
-    -h, --help      Display this help message.
-    -v, --version   Display the version of this script.
-    -a, --author    Set the author name.
-    -l, --language  Set the language of the file ($(join_by ", " ${VALID_LANGUAGES[*]})).
-    -c, --comment   Set the comment character ($(join_by ", " ${VALID_COMMENTS[*]})).
-    -s, --shebang   Set the shebang language ($(join_by ", " ${VALID_SHEBANGS[*]})).
-    -t, --template  Set the template to use ($(join_by ", " ${VALID_TEMPLATES[*]})).
-
-Examples:
-    $0 file.py
-    $0 file.sh
-EOF
-}
-
-
+# Headers Functions
 default_header() {
     local file="$1"
     local slang="$2"
@@ -156,6 +150,7 @@ default_header() {
     print_lines "$comment_character" "$file"
     echo "$comment_character    $(get_translation "Version" "$slang"): 1.0" >> "$file"
     echo "$comment_character    $(get_translation "Last edited by" "$slang"): $user_name" >> "$file"
+    echo "$comment_character    $(get_translation "Last edited on" "$slang"): $(date)" >> "$file"
     print_lines "$comment_character" "$file"
     echo "" >> "$file"
 }
@@ -171,6 +166,67 @@ custom_header() {
     echo "${comment_character} [$(get_translation "Description" "$slang"): ]" >> "$file"
     echo "${comment_character} [$(get_translation "Version" "$slang"): 1.0]" >> "$file"
     echo "${comment_character} [$(get_translation "Last edited by" "$slang"): $user_name]" >> "$file"
+    echo "${comment_character} [$(get_translation "Last edited on" "$slang"): $(date)]" >> "$file"
+}
+
+# Main Functions
+
+Help() {
+    cat << EOF
+Usage: $(basename $0) [options] <file>
+Description:
+    This script adds a header to the specified file depending on its extension.
+
+Options:
+    -h, --help      Display this help message.
+    -v, --version   Display the version of this script.
+    -a, --author    Set the author name.
+    -l, --language  Set the language of the file ($(join_by ", " ${VALID_LANGUAGES[*]})). Default is based on your system language ("$lang" here).
+    -c, --comment   Set the comment character ($(join_by ", " ${VALID_COMMENTS[*]})). Default is based on the file extension.
+    -s, --shebang   Set the shebang language ($(join_by ", " ${VALID_SHEBANGS[*]})).
+    -t, --template  Set the template to use ($(join_by ", " ${VALID_TEMPLATES[*]})).
+
+Config FIle:
+    You can create a .header_config file in the same directory to set default values.
+    Example:
+        Author=John Doe
+        Language=en
+        Shebang=sh
+        Template=default
+
+Examples:
+    local file="$1"
+    local slang="${lang:-en}"
+
+    $0 file.sh
+EOF
+}
+
+append_header() {
+    local file="$1"
+    local extension="${file##*.}"
+    local temp_header=$(mktemp --suffix=".$extension")
+    write_header "$temp_header"
+
+    # Insert the header at the top
+    { cat "$temp_header"; cat "$file"; } > "${file}.new"
+    mv "${file}.new" "$file"
+    rm -f "$temp_header"
+}
+
+update_header() {
+    local version="$1"
+    local dest_file="$2"
+    local slang="${lang:-en}"
+
+    # Update version number
+    sed -i "s/\($(get_translation "Version" "$slang"): \).*/\1$version/" "$dest_file"
+
+    # Update last edited by
+    sed -i "s/\($(get_translation "Last edited by" "$slang"): \).*/\1$user_name/" "$dest_file"
+
+    # Update last edited on
+    sed -i "s/\($(get_translation "Last edited on" "$slang"): \).*/\1$(date)/" "$dest_file"
 }
 
 write_header() {
@@ -198,8 +254,8 @@ write_header() {
 }
 
 
-OPTIONS=hva:l:c:s:t:
-LONGOPTS=help,version,author:,language:,comment:,shebang:,template:
+OPTIONS=hva:l:c:s:t:u:
+LONGOPTS=help,version,author:,language:,comment:,shebang:,template:,update:
 
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTS --name "$0" -- "$@")
 if [[ $? -ne 0 ]]; then
@@ -251,6 +307,9 @@ while true; do
                 exit 1
             fi
             shift 2;;
+        -u|--update)
+            update_header "$2" "$dest_file"
+            exit;;
         --)
             shift
             break;;
@@ -260,19 +319,16 @@ while true; do
     esac
 done
 
+if [[ -z "$lang" ]]; then
+    lang=${LANG:0:2}
+fi
+
 # Final argument after options should be the filename
 if [[ -n "$1" && ! "$1" =~ ^- ]]; then
     dest_file="$1"
     # If file already exists, prepend the header
     if [[ -f "$dest_file" ]]; then
-        extension="${dest_file##*.}"
-        temp_header=$(mktemp --suffix=".$extension")
-        write_header "$temp_header"
-
-        # Insert the header at the top
-        { cat "$temp_header"; cat "$dest_file"; } > "${dest_file}.new"
-        mv "${dest_file}.new" "$dest_file"
-        rm -f "$temp_header"
+        append_header "$dest_file"
         exit 0;
     fi
     write_header "$dest_file"
