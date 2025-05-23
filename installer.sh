@@ -5,7 +5,7 @@ set -euo pipefail
 # Constants & Colors
 # ====================================================
 RED='\e[31m'; GRN='\e[32m'; BLU='\e[34m'; DEF='\e[0m'
-VERSION="1.0.0"
+VERSION="1.0.1"
 
 # ====================================================
 # Detect User Shell & RC File for exporting paths
@@ -22,6 +22,8 @@ fi
 source /etc/os-release
 
 SUDO="sudo "
+
+ID_LIKE="${ID_LIKE:-$ID}"
 
 case "${ID_LIKE,,}" in
   ubuntu|debian)
@@ -53,12 +55,13 @@ case "${ID_LIKE,,}" in
     REMOVE="emerge --depclean"
     ;;
   *)
-    echo -e "${RED}Unsupported distro: $ID${DEF}" >&2
+    echo -e "${RED}Unsupported distro: $ID_LIKE${DEF}" >&2
     exit 1
     ;;
 esac
 
 CMD_INSTALL="$SUDO $INSTALL"
+CMD_REMOVE="$SUDO $REMOVE"
 
 # ====================================================
 # Logging Helpers
