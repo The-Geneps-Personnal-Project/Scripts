@@ -1,0 +1,17 @@
+name: Run All Script-CIs on PR-Merge to main
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ closed ]
+
+jobs:
+  invoke-script-cis:
+    if: ${{ github.event.pull_request.merged == true }}
+    strategy:
+      matrix:
+        script: [ header, installer ]
+
+    uses: ./.github/workflows/reusable-ci.yml
+    with:
+      script: ${{ matrix.script }}
